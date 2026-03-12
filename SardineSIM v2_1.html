@@ -89,6 +89,11 @@
         }
     </style>
 </head>
+<script>
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("sw.js");
+    }
+</script>
 <body>
     <div id="ui-panel">
         <h3>SardineSIM v2.1</h3>
@@ -609,3 +614,4 @@ function windowResized() {
 </body>
 
 </html>
+
