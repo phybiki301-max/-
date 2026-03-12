@@ -1,0 +1,608 @@
+
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>SardineSIM v2.1</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.js"></script>
+    <style>
+        :root {
+            --bg-color: #0f0f0f;
+            --panel-bg: #1e1e1e;
+            --accent-color: #00ffcc;
+            --text-color: #ffffff;
+        }
+        body { margin: 0; padding: 0; background: var(--bg-color); color: var(--text-color); font-family: 'Segoe UI', sans-serif; overflow: hidden; display: flex; }
+        #ui-panel { width: 280px; height: 100vh; overflow-y: auto; background: var(--panel-bg); padding: 20px; box-sizing: border-box; border-right: 1px solid #333; }
+        h3 { margin: 0 0 15px 0; color: var(--accent-color); font-size: 18px; }
+        .section-title { font-size: 11px; font-weight: bold; color: #777; margin: 18px 0 8px 0; border-top: 1px solid #333; padding-top: 8px; text-transform: uppercase; }
+        .control-row { margin-bottom: 12px; }
+        .label-group { display: flex; justify-content: space-between; margin-bottom: 4px; font-size: 12px; }
+        .val-display { color: var(--accent-color); font-family: monospace; font-weight: bold; }
+        input[type=range] { width: 100%; cursor: pointer; }
+        button { width: 100%; padding: 12px; margin-top: 15px; cursor: pointer; background: var(--accent-color); border: none; color: #000; font-weight: bold; border-radius: 4px; }
+        button:hover { filter: brightness(1.2); }
+        #canvas-container { flex-grow: 1; display: flex; justify-content: center; align-items: center; background: #000; position: relative; }
+        @media (max-aspect-ratio:1/1){
+            body{
+                flex-direction: column;
+                overflow:hidden;
+            }
+            #canvas-container{
+                order:1;
+                width:100%;
+                height:60vh;
+            }
+            #ui-panel{
+                order:2;
+                width:100%;
+                height:40vh;
+                border-right:none;
+                border-top:1px solid #333;
+                overflow-y: auto;
+                box-shadow: inset 0 -20px 20px -20px rgba(0,0,0,0.8);
+                padding-bottom:200px;
+                padding-left:100px;
+                padding-right:100px;
+                font-size:25px;
+            }
+            #ui-panel input[type=range]{
+                height:28px;
+            }
+            #ui-panel input[type=checkbox]{
+                transform: scale(1.4);
+                margin-right:8px;
+            }
+            #ui-panel button{
+                font-size:25px;
+                padding:8px 12px;
+            }
+            .val-display{
+                font-size:22px;
+                font-weight:bold;
+            }
+            .label-group{
+                font-size:22px;
+            }
+            .label-group{
+                font-size:22px;
+            }
+            .section-title{
+                font-size:22px;
+                font-weight:bold;
+                margin-top:20px;
+                margin-bottom:10px;
+            }
+            #ui-panel h3{
+                position:fixed;
+                top:0;
+                left:0;
+                width:100%;
+                background:#111;
+                padding:10px 0;
+                text-align:center;
+                font-size:36px;
+                z-index:1000;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="ui-panel">
+        <h3>SardineSIM v2.1</h3>
+        <div id="ui-btn"></div>
+        <div id="ui-check" style="margin-top: 15px;"></div>
+        <div class="section-title">Range</div>
+        <div id="ui-R1" class="control-row"></div>
+        <div id="ui-ratio21" class="control-row"></div>
+        <div id="ui-ratio32" class="control-row"></div>
+        <div class="section-title">Motion</div>
+        <div id="ui-a" class="control-row"></div>
+        <div id="ui-h" class="control-row"></div>
+        <div id="ui-C3" class="control-row"></div>
+        <div id="ui-noise" class="control-row"></div>
+        <div class="section-title">Interaction</div>
+        <div id="ui-C1" class="control-row"></div>
+        <div id="ui-C2" class="control-row"></div>
+        <div id="ui-inN" class="control-row"></div>
+    </div>
+    <div id="canvas-container"></div>
+
+<script>
+let N = 50, L = 10.0, dt = 0.05;
+let pos = [], vel = [], disturb_frames = 0, current_kick_force = [];
+let showRadius = false, sliders = {};
+let attractNeighborOnly = false;
+let isMobile = false;
+let target_idx = 0;
+let angHist = [], polHist = [];
+let maxHist = 300, simTime = 0;
+let interactionCount = {rep:0, ali:0, att:0};
+
+function setup(){
+    isMobile = windowHeight > windowWidth;
+    let canvas = createCanvas(
+        isMobile ? windowWidth : windowWidth - 280,
+        isMobile ? windowHeight*0.6 : windowHeight
+    );
+    canvas.parent('canvas-container');
+    for(let i=0; i<N; i++){
+        pos.push([random(L), random(L)]);
+        vel.push([random()-0.5, random()-0.5]);
+        current_kick_force.push([0, 0]);
+    }
+    createUI();
+}
+
+function makeSlider(id, label, min, max, val, step, parentId) {
+    let container = select('#' + parentId);
+    let labelDiv = createDiv().parent(container).class('label-group');
+    createSpan(label).parent(labelDiv);
+    let valSpan = createSpan(val).parent(labelDiv).class('val-display');
+    let s = createSlider(min, max, val, step).parent(container);
+    s.input(() => valSpan.html(s.value()));
+    return s;
+}
+
+function createUI(){
+    sliders.a = makeSlider('a', 'Self-propel', 0, 5, 1.0, 0.01, 'ui-a');
+    sliders.h = makeSlider('h', 'Alignment', 0, 5, 1.0, 0.01, 'ui-h');
+    sliders.C1 = makeSlider('C1', 'Repulsion', -2, 0, -0.5, 0.01, 'ui-C1');
+    sliders.C2 = makeSlider('C2', 'Attraction', 0, 0.2, 0.06, 0.001, 'ui-C2');
+    sliders.C3 = makeSlider('C3', 'Friction', 0, 5, 2.0, 0.01, 'ui-C3');
+    sliders.noise = makeSlider('noise', 'Noise', 0, 10, 0, 0.01, 'ui-noise');
+    sliders.inN = makeSlider('inN', 'Neighbors', 1, N-1, 7, 1, 'ui-inN');
+    sliders.R1 = makeSlider('R1', 'R1 (Repel)', 0.1, 1.25, 1.25, 0.01, 'ui-R1');
+    sliders.ratio21 = makeSlider('ratio21', 'R2/R1 Ratio', 1.0, 2.0, 2.0, 0.001, 'ui-ratio21');
+    sliders.ratio32 = makeSlider('ratio32', 'R3/R2  (Attract)', 1.0, 2, 2.0, 0.01, 'ui-ratio32');
+    let check = createCheckbox(" Show Detail", false).parent('ui-check');
+    let attractCheck = createCheckbox(" Attraction = neighbors only", false).parent('ui-check');
+    attractCheck.changed(() => attractNeighborOnly = attractCheck.checked());
+    check.changed(() => showRadius = check.checked());
+    let btn = createButton("RANDOM KICK!").parent('ui-btn');
+    btn.mousePressed(() => {
+    disturb_frames = 40;
+    for(let i=0; i<N; i++) current_kick_force[i] = [(random()-0.5)*15, (random()-0.5)*15];
+    });
+}
+
+function draw(){
+    background(10); 
+    updateSimulation();
+    simTime += dt;
+
+    let sc = min(width * 0.6, height * 0.8) / L;
+    // 余白pixel数
+    let offX = isMobile ? (width - L * sc) / 2 : (width - L * sc) / 2 - 50;
+    if (showRadius&&isMobile){offX = (width - L * sc) / 2 - 150}
+    let offY = isMobile ? (height - L * sc) / 2 + 48 : (height - L * sc) / 2;
+
+    fill(0); noStroke();
+    rect(offX, offY, L*sc, L*sc);
+
+    drawingContext.save(); 
+    beginShape();
+    vertex(offX, offY); vertex(offX + L*sc, offY);
+    vertex(offX + L*sc, offY + L*sc); vertex(offX, offY + L*sc);
+    endShape(CLOSE);
+    drawingContext.clip(); 
+
+    // 重心の計算
+    let sumSX=0, sumCX=0, sumSY=0, sumCY=0;
+    for (let i=0; i<N; i++) {
+        let tx=(pos[i][0]/L)*TWO_PI, ty=(pos[i][1]/L)*TWO_PI;
+        sumSX+=sin(tx); sumCX+=cos(tx); sumSY+=sin(ty); sumCY+=cos(ty);
+    }
+    let cmX=(atan2(sumSX, sumCX)/TWO_PI*L+L)%L, cmY=(atan2(sumSY, sumCY)/TWO_PI*L+L)%L;
+
+    if (showRadius) {
+        fill(255, 255, 0); noStroke();
+        ellipse(offX + cmX * sc, offY + cmY * sc, 10, 10);
+    }
+
+    let Lnorm = computeAngularMomentum(cmX, cmY);
+    let P = computePolarization();
+    
+    angHist.push(Lnorm); polHist.push(P);
+    if(angHist.length > maxHist) angHist.shift();
+    if(polHist.length > maxHist) polHist.shift();
+
+    drawParticles(sc, offX, offY);
+
+    drawingContext.restore(); 
+
+    noFill(); stroke(80); strokeWeight(2);
+    rect(offX, offY, L*sc, L*sc);
+
+    if (showRadius) {
+        computeInteractionCounts();
+        if (isMobile) {
+            drawAngularGraph(width - 300, offY + L * sc - 170, 280, 160);
+            drawInteractionBarGraph(width - 300, offY + L * sc - 170 - 200, 280, 160);
+            drawScreenLegend(width - 170, offY);
+        } else {
+            drawAngularGraph(width - 320, offY + L * sc - 170, 280, 160);
+            drawInteractionBarGraph(width - 320, offY + L * sc - 170 - 200, 280, 160);
+            drawScreenLegend(width - 160, offY);
+        }
+    }
+
+}
+
+function updateSimulation(){ rk4_step(pos,vel); if(disturb_frames>0) disturb_frames--; else for(let i=0;i<N;i++) current_kick_force[i]=[0,0]; }
+
+function rk4_step(pos, vel){
+    let a1=compute_forces(pos,vel), v2=[], p2=[];
+    for(let i=0;i<N;i++){ v2.push([vel[i][0]+0.5*dt*a1[i][0], vel[i][1]+0.5*dt*a1[i][1]]); p2.push([pos[i][0]+0.5*dt*vel[i][0], pos[i][1]+0.5*dt*vel[i][1]]); }
+    let a2=compute_forces(p2,v2), v3=[], p3=[];
+    for(let i=0;i<N;i++){ v3.push([vel[i][0]+0.5*dt*a2[i][0], vel[i][1]+0.5*dt*a2[i][1]]); p3.push([pos[i][0]+0.5*dt*v2[i][0], pos[i][1]+0.5*dt*v2[i][1]]); }
+    let a3=compute_forces(p3,v3), v4=[], p4=[];
+    for(let i=0;i<N;i++){ v4.push([vel[i][0]+dt*a3[i][0], vel[i][1]+dt*a3[i][1]]); p4.push([pos[i][0]+dt*v3[i][0], pos[i][1]+dt*v3[i][1]]); }
+    let a4=compute_forces(p4,v4);
+    for(let i=0;i<N;i++){
+        pos[i][0]=(pos[i][0]+dt/6*(vel[i][0]+2*v2[i][0]+2*v3[i][0]+v4[i][0])+L)%L;
+        pos[i][1]=(pos[i][1]+dt/6*(vel[i][1]+2*v2[i][1]+2*v3[i][1]+v4[i][1])+L)%L;
+        vel[i][0]+=dt/6*(a1[i][0]+2*a2[i][0]+2*a3[i][0]+a4[i][0]);
+        vel[i][1]+=dt/6*(a1[i][1]+2*a2[i][1]+2*a3[i][1]+a4[i][1]);
+    }
+}
+
+// 物理演算
+function compute_forces(p, v){
+    let f=[], R1=sliders.R1.value(), ratio21=sliders.ratio21.value(), R2=R1*ratio21, ratio32=sliders.ratio32.value(), R3=R2*ratio32
+    let p_a=sliders.a.value(), p_h=sliders.h.value(), p_C1=sliders.C1.value(), p_C2=sliders.C2.value(), p_C3=sliders.C3.value(), p_noise=sliders.noise.value(), p_inN=sliders.inN.value();
+    for(let i=0; i<N; i++) f.push([0,0]);
+    for(let i=0; i<N; i++){
+        let count_v=0, count_le=0, dists=[];
+        for(let j=0; j<N; j++){
+            let dx=p[j][0]-p[i][0], dy=p[j][1]-p[i][1];
+            dx-=L*Math.round(dx/L); dy-=L*Math.round(dy/L);
+            dists.push({j, d:sqrt(dx**2+dy**2), dx, dy});
+        }
+        dists[i].d=Infinity; dists.sort((a,b)=>a.d-b.d);
+        let neighbors=dists.slice(0, p_inN);
+        let f_s=[0,0], f_le=[0,0], f_v=[0,0], f_att=[0,0], f_tei=[0,0];
+        // 引力は全粒子対象切替可
+        let attractList = attractNeighborOnly ? neighbors : dists;
+        for(let o of attractList){
+            if(o.d>=R2 && o.d<=R3){
+                f_att[0]+=p_C2*o.dx/o.d;
+                f_att[1]+=p_C2*o.dy/o.d;
+            }
+        }
+        // 斥力・整列はinN限定
+        for(let o of neighbors){
+            if(o.d<R1){ 
+                f_le[0]+=p_C1*o.dx/(o.d*o.d); f_le[1]+=p_C1*o.dy/(o.d*o.d); count_le++; 
+            }
+            else if(o.d<R2){
+                let dvx=v[o.j][0]-v[i][0], dvy=v[o.j][1]-v[i][1], dvn=sqrt(dvx**2+dvy**2);
+                if(dvn>0){ f_v[0]+=p_h*dvx/dvn; f_v[1]+=p_h*dvy/dvn; count_v++; }
+            }
+        }
+    if(count_v>0){ f_v[0]/=count_v; f_v[1]/=count_v; }
+    if(count_le>0){ f_le[0]/=count_le; f_le[1]/=count_le; }
+    let vn=sqrt(v[i][0]**2+v[i][1]**2); if(vn>0){ f_s[0]=p_a*v[i][0]/vn; f_s[1]=p_a*v[i][1]/vn; }
+    f_tei[0]=-p_C3*v[i][0]; f_tei[1]=-p_C3*v[i][1];
+    let fnx=p_noise*(random()-0.5), fny=p_noise*(random()-0.5);
+    f[i][0]=f_s[0]+f_le[0]+f_v[0]+f_att[0]+f_tei[0]+fnx+current_kick_force[i][0];
+    f[i][1]=f_s[1]+f_le[1]+f_v[1]+f_att[1]+f_tei[1]+fny+current_kick_force[i][1];
+    }
+    return f;
+}
+
+function computeAngularMomentum(cx, cy){
+    let Lz=0, norm=0;
+    for(let i=0;i<N;i++){ let rx=pos[i][0]-cx, ry=pos[i][1]-cy; rx-=L*Math.round(rx/L); ry-=L*Math.round(ry/L); Lz+=rx*vel[i][1]-ry*vel[i][0]; norm+=sqrt(rx**2+ry**2)*sqrt(vel[i][0]**2+vel[i][1]**2); }
+    return norm > 0 ? Lz/norm : 0;
+}
+
+function computePolarization(){ 
+    let vx=0, vy=0, vm=0; for(let i=0;i<N;i++){ vx+=vel[i][0]; vy+=vel[i][1]; vm+=sqrt(vel[i][0]**2+vel[i][1]**2); } 
+    return vm>0?sqrt(vx**2+vy**2)/vm:0; 
+}
+
+function drawParticles(sc, offX, offY){
+    let R1=sliders.R1.value(), ratio21=sliders.ratio21.value(), R2=R1*ratio21, ratio32=sliders.ratio32.value(), R3=R2*ratio32, inN=sliders.inN.value();
+    let tx=pos[target_idx][0], ty=pos[target_idx][1];
+
+    // ここ簡略できそう
+    let allDists=[];
+    for(let j=0; j<N; j++){ 
+        if(j==target_idx)continue; 
+        let dx=pos[j][0]-tx, dy=pos[j][1]-ty; 
+        dx-=L*Math.round(dx/L); dy-=L*Math.round(dy/L); 
+        allDists.push({j, d:sqrt(dx**2+dy**2), dx, dy}); 
+    }
+    allDists.sort((a,b)=>a.d-b.d);
+    let activeNeighbors = allDists.slice(0, inN);
+
+    // 描画用のリスト（物理ロジックに合わせる）
+    let rep=[], ali=[], att=[];
+    // 1. 引力は「全員」が対象切替可
+    let attractList = attractNeighborOnly ? activeNeighbors : allDists;
+    for(let o of attractList) {
+        if(o.d >= R2 && o.d <= R3) att.push(o);
+    }
+    // 2. 斥力と整列は「inN以内」だけが対象
+    for(let o of activeNeighbors) {
+        if(o.d < R1) rep.push(o);
+        else if(o.d < R2) ali.push(o);
+    }
+    
+    if(showRadius){
+        strokeWeight(1);
+        for(let o of att){
+            stroke(80,150,255);
+        drawPeriodicVector(tx,ty,o.dx,o.dy,sc,offX,offY);
+        }
+        for(let o of ali){
+            stroke(80,255,80);
+            drawPeriodicVector(tx,ty,o.dx,o.dy,sc,offX,offY);
+        }
+        for(let o of rep){
+            stroke(255,80,80);
+            drawPeriodicVector(tx,ty,o.dx,o.dy,sc,offX,offY);
+        }
+    } 
+
+    for(let i=0; i<N; i++){
+        let x=offX+pos[i][0]*sc, y=offY+pos[i][1]*sc, ang=atan2(vel[i][1], vel[i][0]);
+        if(showRadius){
+            if(i==target_idx) fill(255,0,255);
+            else if(rep.some(o=>o.j==i)) fill(255,80,80);
+            else if(ali.some(o=>o.j==i)) fill(80,255,80);
+            else if(att.some(o=>o.j==i)) fill(80,150,255);
+            else fill(80);
+        } else {
+            colorMode(HSB, 360, 100, 100); fill(map(degrees(ang),-180,180,0,360), 90, 100); colorMode(RGB, 255);
+        }
+        noStroke(); push(); translate(x,y); rotate(ang); triangle(8,0,-4,3,-4,-3); pop();
+    }
+    if(showRadius){
+        noFill(); 
+        // 斥力円
+        stroke(255,0,0,100); circle(offX+tx*sc, offY+ty*sc, R1*2*sc);
+        // 境界をまたぐ場合、反対側にも円を生成
+        // 十字方向
+        if(tx-R1 < 0) {
+            stroke(255,0,0,100); circle(offX+(tx+L)*sc, offY+ty*sc, R1*2*sc);
+        }
+        if(ty-R1 < 0) {
+            stroke(255,0,0,100); circle(offX+tx*sc, offY+(ty+L)*sc, R1*2*sc);
+        }
+        if(tx+R1 > L) {
+            stroke(255,0,0,100); circle(offX+(tx-L)*sc, offY+ty*sc, R1*2*sc);
+        }
+        if(ty+R1 > L) {
+            stroke(255,0,0,100); circle(offX+tx*sc, offY+(ty-L)*sc, R1*2*sc);
+        }
+        // 対角方向
+        if(tx**2 + ty**2 - R1**2 < 0) {
+            stroke(255,0,0,100); circle(offX+(tx+L)*sc, offY+(ty+L)*sc, R1*2*sc);
+        }
+        if((tx-L)**2 + ty**2 - R1**2 < 0) {
+            stroke(255,0,0,100); circle(offX+(tx-L)*sc, offY+(ty+L)*sc, R1*2*sc);
+        }
+        if(tx**2 + (ty-L)**2 - R1**2 < 0) {
+            stroke(255,0,0,100); circle(offX+(tx+L)*sc, offY+(ty-L)*sc, R1*2*sc);
+        }
+        if((tx-L)**2 + (ty-L)**2 - R1**2 < 0) {
+            stroke(255,0,0,100); circle(offX+(tx-L)*sc, offY+(ty-L)*sc, R1*2*sc);
+        }
+
+        // 配向円
+        stroke(0,255,0,100); circle(offX+tx*sc, offY+ty*sc, R2*2*sc);
+        // 境界をまたぐ場合、反対側にも円を生成
+        // 十字方向
+        if(tx-R2 < 0) {
+            stroke(0,255,0,100); circle(offX+(tx+L)*sc, offY+ty*sc, R2*2*sc);
+        }
+        if(ty-R2 < 0) {
+            stroke(0,255,0,100); circle(offX+tx*sc, offY+(ty+L)*sc, R2*2*sc);
+        }
+        if(tx+R2 > L) {
+            stroke(0,255,0,100); circle(offX+(tx-L)*sc, offY+ty*sc, R2*2*sc);
+        }
+        if(ty+R2 > L) {
+            stroke(0,255,0,100); circle(offX+tx*sc, offY+(ty-L)*sc, R2*2*sc);
+        }
+        // 対角方向
+        if(tx**2 + ty**2 - R2**2 < 0) {
+            stroke(0,255,0,100); circle(offX+(tx+L)*sc, offY+(ty+L)*sc, R2*2*sc);
+        }
+        if((tx-L)**2 + ty**2 - R2**2 < 0) {
+            stroke(0,255,0,100); circle(offX+(tx-L)*sc, offY+(ty+L)*sc, R2*2*sc);
+        }
+        if(tx**2 + (ty-L)**2 - R2**2 < 0) {
+            stroke(0,255,0,100); circle(offX+(tx+L)*sc, offY+(ty-L)*sc, R2*2*sc);
+        }
+        if((tx-L)**2 + (ty-L)**2 - R2**2 < 0) {
+            stroke(0,255,0,100); circle(offX+(tx-L)*sc, offY+(ty-L)*sc, R2*2*sc);
+        }
+
+        // 引力円
+        stroke(0,120,255,100); circle(offX+tx*sc, offY+ty*sc, R3*2*sc);
+        // 境界をまたぐ場合、反対側にも円を生成
+        // 十字方向
+        if(tx-R3 < 0) {
+            stroke(0,120,255,100); circle(offX+(tx+L)*sc, offY+ty*sc, R3*2*sc);
+        }
+        if(ty-R3 < 0) {
+            stroke(0,120,255,100); circle(offX+tx*sc, offY+(ty+L)*sc, R3*2*sc);
+        }
+        if(tx+R3 > L) {
+            stroke(0,120,255,100); circle(offX+(tx-L)*sc, offY+ty*sc, R3*2*sc);
+        }
+        if(ty+R3 > L) {
+            stroke(0,120,255,100); circle(offX+tx*sc, offY+(ty-L)*sc, R3*2*sc);
+        }
+        // 対角方向
+        if(tx**2 + ty**2 - R3**2 < 0) {
+            stroke(0,120,255,100); circle(offX+(tx+L)*sc, offY+(ty+L)*sc, R3*2*sc);
+        }
+        if((tx-L)**2 + ty**2 - R3**2 < 0) {
+            stroke(0,120,255,100); circle(offX+(tx-L)*sc, offY+(ty+L)*sc, R3*2*sc);
+        }
+        if(tx**2 + (ty-L)**2 - R3**2 < 0) {
+            stroke(0,120,255,100); circle(offX+(tx+L)*sc, offY+(ty-L)*sc, R3*2*sc);
+        }
+        if((tx-L)**2 + (ty-L)**2 - R3**2 < 0) {
+            stroke(0,120,255,100); circle(offX+(tx-L)*sc, offY+(ty-L)*sc, R3*2*sc);
+        }
+    }
+}
+
+function drawPeriodicVector(x,y,dx,dy,sc,offX,offY){
+    let x2 = x + dx;
+    let y2 = y + dy;
+
+    line(
+        offX + x * sc,
+        offY + y * sc,
+        offX + x2 * sc,
+        offY + y2 * sc
+    );
+
+    // 境界をまたぐ場合に反対側からも描く
+    if(x2 < 0) line(offX + (x+L)*sc, offY + y*sc, offX + (x2+L)*sc, offY + y2*sc);
+    if(x2 > L) line(offX + (x-L)*sc, offY + y*sc, offX + (x2-L)*sc, offY + y2*sc);
+    if(y2 < 0) line(offX + x*sc, offY + (y+L)*sc, offX + x2*sc, offY + (y2+L)*sc);
+    if(y2 > L) line(offX + x*sc, offY + (y-L)*sc, offX + x2*sc, offY + (y2-L)*sc);
+}
+
+function computeInteractionCounts(){
+    interactionCount.rep = 0;
+    interactionCount.ali = 0;
+    interactionCount.att = 0;
+    let i = target_idx;
+    let R1 = sliders.R1.value();
+    let ratio21 = sliders.ratio21.value();
+    let R2 = R1 * ratio21;
+    let ratio32 = sliders.ratio32.value();
+    let R3 = R2*ratio32
+    let p_inN = sliders.inN.value();
+    let dists = [];
+    //ここも簡略できそう
+    for(let j=0; j<N; j++){
+        let dx = pos[j][0] - pos[i][0];
+        let dy = pos[j][1] - pos[i][1];
+        dx -= L*Math.round(dx/L);
+        dy -= L*Math.round(dy/L);
+        let d = sqrt(dx*dx + dy*dy);
+        dists.push({j, d, dx, dy});
+    }
+    dists[i].d = Infinity;
+    dists.sort((a,b)=>a.d-b.d);
+    let neighbors = dists.slice(0, p_inN);
+    // 斥力
+    for(let o of neighbors){
+        if(o.d < R1) interactionCount.rep++;
+    }
+    // 整列
+    for(let o of neighbors){
+        if(o.d >= R1 && o.d < R2) interactionCount.ali++;
+    }
+    let attractList = attractNeighborOnly ? neighbors : dists;
+    // 引力（全粒子切替可）
+    for(let o of attractList){
+        if(o.d >= R2 && o.d <= R3) interactionCount.att++;
+    }
+}
+
+function drawAngularGraph(x, y, w, h){
+    fill(20, 220); stroke(100); rect(x, y, w, h, 8);
+    let ticks = [-1.0, 0.0, 1.0]; textSize(15); textAlign(RIGHT, CENTER);
+    for(let v of ticks){
+        let ty = map(v, -1.1, 1.1, y + h, y); stroke(50); line(x, ty, x + w, ty);
+        noStroke(); fill(150); text(v.toFixed(1), x - 5, ty);
+    }
+    textAlign(CENTER, TOP); fill(150); text("t", x + w/2, y + h + 5);
+    noFill(); strokeWeight(2);
+    stroke(0, 255, 200); beginShape(); for(let i=0; i<angHist.length; i++) vertex(map(i,0,maxHist-1,x,x+w), map(angHist[i],-1.1,1.1,y+h,y)); endShape();
+    stroke(255, 170, 0); beginShape(); for(let i=0; i<polHist.length; i++) vertex(map(i,0,maxHist-1,x,x+w), map(polHist[i],-1.1,1.1,y+h,y)); endShape();
+    noStroke(); textAlign(LEFT, TOP); fill(0, 255, 200); text("L: Angular", x+10, y+10); fill(255, 170, 0); text("P: Polar", x+10, y+25);
+}
+
+function drawInteractionBarGraph(x,y,w,h){
+    let rep = interactionCount.rep;
+    let ali = interactionCount.ali;
+    let att = interactionCount.att;
+    let maxVal = 25;
+
+    noStroke();
+    fill(20);
+    rect(x,y,w,h);
+
+    let margin = 20;
+    let barW = (w - margin*2)/3;
+
+    // repulsion
+    fill(255,80,80);
+    let h1 = map(rep,0,maxVal,0,h-30);
+    rect(x+margin+barW*0,y+h-h1-10,barW,h1);
+
+    // alignment
+    fill(80,255,80);
+    let h2 = map(ali,0,maxVal,0,h-30);
+    rect(x+margin+barW*1,y+h-h2-10,barW,h2);
+
+    // attraction
+    fill(80,150,255);
+    let h3 = map(att,0,maxVal,0,h-30);
+    rect(x+margin+barW*2,y+h-h3-10,barW,h3);
+
+    fill(255);
+    textAlign(CENTER);
+
+    text(rep,x+margin+barW*0+barW/2,y+h+2);
+    text(ali,x+margin+barW*1+barW/2,y+h+2);
+    text(att,x+margin+barW*2+barW/2,y+h+2);
+
+    text("REP",x+margin+barW*0+barW/2,y+h+16);
+    text("ALI",x+margin+barW*1+barW/2,y+h+16);
+    text("ATT",x+margin+barW*2+barW/2,y+h+16);
+}
+
+function drawScreenLegend(x, y) {
+    let items = [
+        { label: "Target", color: [255, 0, 255], type: "rect" },
+        { label: "CM", color: [255, 255, 0], type: "circle" },
+        { label: "Repel", color: [255, 80, 80], type: "rect" },
+        { label: "Align", color: [80, 255, 80], type: "rect" },
+        { label: "Attract", color: [80, 150, 255], type: "rect" },
+        { label: "Other", color: [80, 80, 80], type: "rect" }
+    ];
+    if(isMobile) {
+        let w = 130, h = 140; fill(20, 180); stroke(80); rect(x + 20, y, w, h, 8);
+        noStroke(); textAlign(LEFT, TOP); textSize(22);
+        let curY = y + 10;
+        for(let item of items) {
+            fill(item.color);
+            if(item.type === "rect") rect(x + 30, curY, 18, 18); else ellipse(x + 9 + 30, curY + 9, 18, 18);
+            fill(200); text(item.label, x + 30 + 40, curY - 1); curY += 20;
+        }
+    }
+    else {
+        let w = 130, h = 140; fill(20, 180); stroke(80); rect(x, y, w, h, 8);
+        noStroke(); textAlign(LEFT, TOP); textSize(11);
+        let curY = y + 10;
+        for(let item of items) {
+            fill(item.color);
+            if(item.type === "rect") rect(x + 10, curY, 10, 10); else ellipse(x + 15, curY + 5, 10, 10);
+            fill(200); text(item.label, x + 30, curY - 1); curY += 20;
+        }
+    }
+}
+
+function windowResized() { 
+    isMobile = windowHeight > windowWidth;
+    if(isMobile){
+        resizeCanvas(windowWidth, windowHeight*0.6);
+    }else{
+        resizeCanvas(windowWidth-280, windowHeight);
+    }
+}
+</script>
+</body>
+</html>
